@@ -1,4 +1,3 @@
-import { next as Automerge } from "@automerge/automerge/slim"
 import { DocHandle } from "./DocHandle.js"
 import { decodeHeads } from "./AutomergeUrl.js"
 import type { DocumentId, UrlHeads } from "./types.js"
@@ -22,11 +21,11 @@ import { type FindProgress, queryStateToFindProgress } from "./_compat.js"
  */
 export type SourceState = "pending" | "ready" | "unavailable"
 
-export type QueryState<T> =
+export type QueryState<T, H extends DocHandle<any, any> = DocHandle<T>> =
   | { state: "loading"; sources: Record<string, SourceState> }
   | {
       state: "ready"
-      handle: DocHandle<T>
+      handle: H
       sources: Record<string, SourceState>
     }
   | { state: "unavailable"; sources: Record<string, SourceState> }
@@ -39,17 +38,20 @@ export type QueryState<T> =
 /**
  * Read-only view of a document query. Returned by {@link Repo.findWithProgress}
  */
-export interface DocumentProgress<T> {
+export interface DocumentProgress<
+  T,
+  H extends DocHandle<any, any> = DocHandle<T>,
+> {
   readonly documentId: DocumentId
 
   /** Returns the current state of the query. */
-  peek(): QueryState<T>
+  peek(): QueryState<T, H>
 
   /**
    * Subscribe to state changes. The callback fires whenever the query
    * transitions to a new state. Returns an unsubscribe function.
    */
-  subscribe(callback: (state: QueryState<T>) => void): () => void
+  subscribe(callback: (state: QueryState<T, H>) => void): () => void
 
   /**
    * Returns a promise that resolves with the DocHandle when the query reaches
@@ -60,7 +62,7 @@ export interface DocumentProgress<T> {
    * (storage load, sync), which may be serving other concurrent callers. An
    * aborted wait rejects with `signal.reason`.
    */
-  whenReady(options?: { signal?: AbortSignal }): Promise<DocHandle<T>>
+  whenReady(options?: { signal?: AbortSignal }): Promise<H>
 
   /**
    * @deprecated read via `peek().state`. Will be removed in the next major
@@ -113,17 +115,20 @@ const DEFAULT_SOURCE_PRIORITY = 0
  * the result object returned by `findWithProgress`. The new `peek()` method
  * replaces these legacy properties - they should be removed in the next major.
  */
-export class DocumentQuery<T> implements DocumentProgress<T> {
+export class DocumentQuery<
+  T,
+  H extends DocHandle<any, any> = DocHandle<T>,
+> implements DocumentProgress<T, H> {
   readonly documentId: DocumentId
 
-  #handle: DocHandle<T>
+  #handle: H
   #sources = new Map<string, SourceInfo>()
-  #subscribers = new Set<(state: QueryState<T>) => void>()
-  #state: QueryState<T>
+  #subscribers = new Set<(state: QueryState<T, H>) => void>()
+  #state: QueryState<T, H>
   #failed = false
 
   constructor(
-    handle: DocHandle<T>,
+    handle: H,
     sources: Map<string, { priority: SourcePriority }> = new Map()
   ) {
     this.documentId = handle.documentId
@@ -141,7 +146,7 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
     this.#handle.on("heads-changed", () => this.#recompute())
   }
 
-  peek(): QueryState<T> {
+  peek(): QueryState<T, H> {
     return this.#state
   }
 
@@ -161,12 +166,12 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
     return this.#state.state === "failed" ? this.#state.error : undefined
   }
 
-  subscribe(callback: (state: QueryState<T>) => void): () => void {
+  subscribe(callback: (state: QueryState<T, H>) => void): () => void {
     this.#subscribers.add(callback)
     return () => this.#subscribers.delete(callback)
   }
 
-  async whenReady(options?: { signal?: AbortSignal }): Promise<DocHandle<T>> {
+  async whenReady(options?: { signal?: AbortSignal }): Promise<H> {
     const signal = options?.signal
     signal?.throwIfAborted()
 
@@ -181,7 +186,7 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
       throw new Error(`Document ${this.documentId} is unavailable`)
     }
 
-    return new Promise<DocHandle<T>>((resolve, reject) => {
+    return new Promise<H>((resolve, reject) => {
       const onAbort = () => {
         cleanup()
         reject(signal!.reason)
@@ -278,15 +283,14 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
    * internally by the Repo for operations on existing handles (e.g. delete,
    * export).
    */
-  get handle(): DocHandle<T> {
+  get handle(): H {
     return this.#handle
   }
 
   // -- Internal --
 
   #handleHasData(): boolean {
-    const heads = this.#handle.heads()
-    return heads.length > 0
+    return this.#handle.hasData()
   }
 
   #sourcePriority(source: string): SourcePriority {
@@ -304,7 +308,7 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
   }
 
   /** Build the next public state from the current handle and source map. */
-  #computeState(): QueryState<T> {
+  #computeState(): QueryState<T, H> {
     const sources = this.#sourcesView()
 
     // Handle has data → ready, regardless of source states
@@ -330,7 +334,7 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
     return out
   }
 
-  #transition(next: QueryState<T>): void {
+  #transition(next: QueryState<T, H>): void {
     if (statesEqual(this.#state, next)) return
     this.#state = next
     for (const callback of this.#subscribers) {
@@ -346,7 +350,10 @@ export class DocumentQuery<T> implements DocumentProgress<T> {
   }
 }
 
-function statesEqual<T>(a: QueryState<T>, b: QueryState<T>): boolean {
+function statesEqual<T, H extends DocHandle<any, any>>(
+  a: QueryState<T, H>,
+  b: QueryState<T, H>
+): boolean {
   if (a.state !== b.state) return false
   if (a.state === "ready" && b.state === "ready" && a.handle !== b.handle) {
     return false
@@ -375,21 +382,21 @@ function sourceMapsEqual(
  * `findWithProgress(urlWithHeads)` so callers that pass heads in the URL
  * don't see a doc that pre-dates those heads.
  */
-export function progressAtHeads<T>(
-  query: DocumentQuery<T>,
+export function progressAtHeads<T, H extends DocHandle<T, any>>(
+  query: DocumentProgress<T, H>,
   heads: UrlHeads
-): DocumentProgress<T> {
+): DocumentProgress<T, H> {
   const decoded = decodeHeads(heads)
 
-  const stateAtHeads = (): QueryState<T> => {
+  const stateAtHeads = (): QueryState<T, H> => {
     const upstream = query.peek()
     if (upstream.state !== "ready") return upstream
-    if (!Automerge.hasHeads(upstream.handle.fullDoc(), decoded)) {
+    if (!upstream.handle.hasHeads(decoded)) {
       return { state: "loading", sources: upstream.sources }
     }
     return {
       state: "ready",
-      handle: upstream.handle.view(heads),
+      handle: upstream.handle.view(heads) as H,
       sources: upstream.sources,
     }
   }
@@ -409,7 +416,7 @@ export function progressAtHeads<T>(
         cb(next)
       }
 
-      const attachHandle = (handle: DocHandle<T>) => {
+      const attachHandle = (handle: H) => {
         if (detachHandle) return
         handle.on("heads-changed", emit)
         detachHandle = () => handle.off("heads-changed", emit)
@@ -430,18 +437,18 @@ export function progressAtHeads<T>(
     },
     whenReady: async opts => {
       const upstream = await query.whenReady(opts)
-      if (Automerge.hasHeads(upstream.fullDoc(), decoded)) {
-        return upstream.view(heads)
+      if (upstream.hasHeads(decoded)) {
+        return upstream.view(heads) as H
       }
-      return new Promise<DocHandle<T>>((resolve, reject) => {
+      return new Promise<H>((resolve, reject) => {
         const onAbort = () => {
           cleanup()
           reject(opts!.signal!.reason)
         }
         const onChange = () => {
-          if (Automerge.hasHeads(upstream.fullDoc(), decoded)) {
+          if (upstream.hasHeads(decoded)) {
             cleanup()
-            resolve(upstream.view(heads))
+            resolve(upstream.view(heads) as H)
           }
         }
         const cleanup = () => {
@@ -475,14 +482,13 @@ export function progressAtHeads<T>(
  * a document-level concern; the scoped value may be `undefined` if the path
  * doesn't (yet) resolve.
  */
-export function progressAtPath<T>(
-  inner: DocumentProgress<T>,
+export function progressAtPath<T, H extends DocHandle<T, any>>(
+  inner: DocumentProgress<T, H>,
   segments: Segment[]
-): DocumentProgress<T> {
-  const scope = (handle: DocHandle<T>): DocHandle<T> =>
-    handle.sub(...(segments as any[])) as DocHandle<T>
+): DocumentProgress<T, H> {
+  const scope = (handle: H): H => handle.sub(...(segments as any[])) as H
 
-  const mapState = (s: QueryState<T>): QueryState<T> =>
+  const mapState = (s: QueryState<T, H>): QueryState<T, H> =>
     s.state === "ready" ? { ...s, handle: scope(s.handle) } : s
 
   return {

@@ -25,3 +25,5 @@ playwright/.auth/
 .pnpm-store
 .vitest-attachments/
 **/__screenshots__/
+.direnv
+.thole/
