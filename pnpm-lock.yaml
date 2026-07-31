@@ -94,7 +94,7 @@ importers:
         specifier: 'catalog:'
         version: 3.3.2
       '@automerge/automerge-subduction':
-        specifier: 0.16.1
+        specifier: 'catalog:'
         version: 0.16.1
       '@manypkg/cli':
         specifier: ^0.25.1
