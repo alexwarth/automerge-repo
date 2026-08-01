@@ -74,7 +74,7 @@ describe("StorageSource", () => {
     assert.equal(merged.shared, "base")
   })
 
-  it("marks the storage source unavailable when the load fails, instead of leaving the query stuck loading", async () => {
+  it("settles the query as failed when the load fails, instead of leaving it stuck loading", async () => {
     vi.useFakeTimers()
     try {
       type T = { foo?: string }
@@ -98,15 +98,19 @@ describe("StorageSource", () => {
       // (rejected) microtask chain deterministically (no real-time wait).
       await vi.runAllTimersAsync()
 
-      // A failed storage load must settle the "storage" source as unavailable
-      // so the query can resolve. With storage the only source and no handle
-      // data, the query becomes "unavailable" and whenReady() rejects.
+      // The read failed, so we never learned whether the document is in
+      // storage. With storage the only source, the query settles `failed`
+      // carrying that error.
+      const state = query.peek()
       assert.equal(
-        query.peek().state,
-        "unavailable",
-        "failed storage load should mark the source unavailable, not hang the query"
+        state.state,
+        "failed",
+        "failed storage load should settle the query, not hang it"
       )
-      await assert.rejects(query.whenReady(), /unavailable/)
+      if (state.state === "failed") {
+        assert.match(state.error.message, /storage read failed/)
+      }
+      await assert.rejects(query.whenReady(), /storage read failed/)
     } finally {
       vi.useRealTimers()
     }
