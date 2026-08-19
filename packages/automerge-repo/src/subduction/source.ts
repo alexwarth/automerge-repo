@@ -190,6 +190,14 @@ interface SedimentreeEntry {
    */
   saveDeltaPending: boolean
 
+  /**
+   * Hashes of blobs that arrived and were persisted but that the interceptor
+   * could not transform yet (their decryption key had not arrived).
+   * `#compactAbsorbed` would otherwise classify them as absorbed into a fragment
+   * and delete them before we are able to decrypt them.
+   */
+  untransformedHashes: Set<string>
+
   // True when stored blobs exist that the interceptor could not transform
   // (e.g., their decryption keys have not arrived yet). shareConfigChanged
   // uses this to re-transform such an entry's blobs once a key change may
@@ -657,11 +665,14 @@ export class SubductionSource implements DocumentSource {
           if (!result) {
             // Could not transform this blob yet. Mark the entry so a later
             // shareConfigChanged retries it, and schedule a content-driven
-            // retry.
+            // retry. Remember the hash so compaction does not delete the
+            // stored blob before that retry can run.
             entry.hasUntransformedBlobs = true
+            entry.untransformedHashes.add(hex)
             this.#scheduleTransformRetry(entry)
             return
           }
+          entry.untransformedHashes.delete(hex)
           entry.pendingInbound.push(result)
           if (!entry.inboundFlushScheduled) {
             entry.inboundFlushScheduled = true
@@ -771,6 +782,7 @@ export class SubductionSource implements DocumentSource {
       lastSavedHeads: new Set(),
       knownHashes: new Set(),
       persistedCommitHashes: new Set(),
+      untransformedHashes: new Set(),
       persistedFragmentHashes: new Set(),
       compactionInFlight: null,
       flushSave: throttledSave,
@@ -1218,8 +1230,7 @@ export class SubductionSource implements DocumentSource {
     if (!allBlobs || allBlobs.length === 0) return false
 
     // Prefer the id-keyed view of the same blobs. Fall back to the id-less one
-    // if it does not cover everything subduction reports, so this can only add
-    // ids, never drop a blob.
+    // if it does not cover everything subduction reports.
     let blobsWithIds: Array<{ idHex: string; blob: Uint8Array }> | null = null
     try {
       const keyed = await this.#idKeyedBlobs(entry)
@@ -1233,8 +1244,8 @@ export class SubductionSource implements DocumentSource {
     if (!blobsWithIds) blobsWithIds = allBlobs.map(blob => ({ idHex: "", blob }))
     blobsWithIds.sort((a, b) => b.blob.byteLength - a.blob.byteLength)
 
-    // Everything here is already in subduction's storage, so none of it is a
-    // local write and none of it should be re-encrypted and re-saved as one.
+    // Record these IDs as known hashes since nothing in subduction's storage
+    // should be re-encrypted and re-saved.
     for (const u of blobsWithIds) {
       if (u.idHex) entry.knownHashes.add(u.idHex)
     }
@@ -1260,8 +1271,10 @@ export class SubductionSource implements DocumentSource {
           )
           if (result) {
             transformed.push(result)
+            if (unit.idHex) entry.untransformedHashes.delete(unit.idHex)
           } else {
             stillPending.push(unit)
+            if (unit.idHex) entry.untransformedHashes.add(unit.idHex)
           }
         }
         pending = stillPending
@@ -1793,11 +1806,15 @@ export class SubductionSource implements DocumentSource {
 
     const staleCommits: string[] = []
     for (const hex of entry.persistedCommitHashes) {
-      if (!liveCommits.has(hex)) staleCommits.push(hex)
+      if (!liveCommits.has(hex) && !entry.untransformedHashes.has(hex)) {
+        staleCommits.push(hex)
+      }
     }
     const staleFragments: string[] = []
     for (const hex of entry.persistedFragmentHashes) {
-      if (!liveFragments.has(hex)) staleFragments.push(hex)
+      if (!liveFragments.has(hex) && !entry.untransformedHashes.has(hex)) {
+        staleFragments.push(hex)
+      }
     }
 
     if (staleCommits.length === 0 && staleFragments.length === 0) return
