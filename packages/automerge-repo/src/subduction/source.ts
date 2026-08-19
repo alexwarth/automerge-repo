@@ -1166,6 +1166,32 @@ export class SubductionSource implements DocumentSource {
   }
 
   /**
+   * Pair each stored blob with the commit or fragment id it belongs to.
+   */
+  async #idKeyedBlobs(
+    entry: SedimentreeEntry
+  ): Promise<Array<{ idHex: string; blob: Uint8Array }>> {
+    const [commits, fragments] = await Promise.all([
+      this.#storage.loadAllCommits(entry.sedimentreeId),
+      this.#storage.loadAllFragments(entry.sedimentreeId),
+    ])
+    const out: Array<{ idHex: string; blob: Uint8Array }> = []
+    for (const c of commits) {
+      out.push({
+        idHex: c.signed.payload.commitId.toHexString(),
+        blob: new Uint8Array(c.blob),
+      })
+    }
+    for (const f of fragments) {
+      out.push({
+        idHex: f.signed.payload.head.toHexString(),
+        blob: new Uint8Array(f.blob),
+      })
+    }
+    return out
+  }
+
+  /**
    * Load all blobs for a sedimentree from Subduction and apply them to the
    * handle via `Automerge.loadIncremental`. If new data was loaded, signal
    * the query so it can transition to "ready".
@@ -1190,31 +1216,52 @@ export class SubductionSource implements DocumentSource {
       } blob(s), ${totalBytes} bytes, heads=${headCount()}`
     )
     if (!allBlobs || allBlobs.length === 0) return false
-    allBlobs.sort((a, b) => b.byteLength - a.byteLength)
 
-    let toApply = allBlobs
+    // Prefer the id-keyed view of the same blobs. Fall back to the id-less one
+    // if it does not cover everything subduction reports, so this can only add
+    // ids, never drop a blob.
+    let blobsWithIds: Array<{ idHex: string; blob: Uint8Array }> | null = null
+    try {
+      const keyed = await this.#idKeyedBlobs(entry)
+      if (keyed.length >= allBlobs.length) blobsWithIds = keyed
+    } catch (e) {
+      this.#log.debug(
+        "idKeyedBlobs failed, falling back to id-less load: %O",
+        e
+      )
+    }
+    if (!blobsWithIds) blobsWithIds = allBlobs.map(blob => ({ idHex: "", blob }))
+    blobsWithIds.sort((a, b) => b.blob.byteLength - a.blob.byteLength)
+
+    // Everything here is already in subduction's storage, so none of it is a
+    // local write and none of it should be re-encrypted and re-saved as one.
+    for (const u of blobsWithIds) {
+      if (u.idHex) entry.knownHashes.add(u.idHex)
+    }
+
+    let toApply = blobsWithIds.map(u => u.blob)
     if (this.#blobInterceptor) {
       // Transforming one blob may let the interceptor transform others
       // that failed on an earlier pass. Re-run over the still-pending
       // blobs until a pass makes no progress. Each pass strictly shrinks
       // `pending` or stops, so this runs at most N passes.
       const transformed: Uint8Array[] = []
-      let pending = allBlobs
+      let pending = blobsWithIds
       let prevPendingLen = pending.length + 1
       while (pending.length > 0 && pending.length < prevPendingLen) {
         prevPendingLen = pending.length
-        const stillPending: Uint8Array[] = []
-        for (const blob of pending) {
+        const stillPending: Array<{ idHex: string; blob: Uint8Array }> = []
+        for (const unit of pending) {
           const result = await this.#blobInterceptor.transformIncoming(
             entry.query.documentId,
-            "",
-            blob,
+            unit.idHex,
+            unit.blob,
             (id: string) => this.#storage.loadBlobById(entry.sedimentreeId, id)
           )
           if (result) {
             transformed.push(result)
           } else {
-            stillPending.push(blob)
+            stillPending.push(unit)
           }
         }
         pending = stillPending
