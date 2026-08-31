@@ -5,6 +5,7 @@ import { DocHandle } from "../DocHandle.js"
 import { parseAutomergeUrl } from "../AutomergeUrl.js"
 import {
   DocMessage,
+  EphemeralMessage,
   MessageContents,
   OpenDocMessage,
 } from "../network/messages.js"
@@ -70,6 +71,18 @@ export interface AutomergeSyncConfig {
    * {@link SHARE_POLICY_CONCURRENCY}.
    */
   sharePolicyConcurrency?: number
+
+  /**
+   * Allocates the (senderId, sessionId, count) envelope for one outbound
+   * ephemeral broadcast, so that every per-peer copy of the broadcast
+   * shares a single identity (receivers deduplicate on that triple). When
+   * absent, the network layer stamps each copy individually as it is sent,
+   * which defeats deduplication across network paths.
+   */
+  stampEphemeralMessage?: () => Pick<
+    EphemeralMessage,
+    "senderId" | "sessionId" | "count"
+  >
 }
 
 interface CollectionSynchronizerEvents {
@@ -267,6 +280,7 @@ export class CollectionSynchronizer
       query,
       networkReady: this.#networkReady,
       shareConfig: this.#config.shareConfig,
+      stampEphemeralMessage: this.#config.stampEphemeralMessage,
     })
 
     docSync.on("message", event => this.emit("message", event))
