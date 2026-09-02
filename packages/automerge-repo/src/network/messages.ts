@@ -143,8 +143,22 @@ export type DocMessage =
  */
 export type MessageContents<T extends Message = RepoMessage> =
   T extends EphemeralMessage
-    ? Omit<T, "senderId" | "count" | "sessionId">
+    ? Omit<T, "senderId" | "count" | "sessionId"> & Partial<EphemeralStamp>
     : Omit<T, "senderId">
+
+/**
+ * The fields that identify one ephemeral broadcast.
+ *
+ * Receivers deduplicate ephemeral messages on this triple, so every per-peer
+ * copy of a single logical broadcast must carry the same one. It is allocated
+ * either by the sender of the broadcast (see
+ * {@link NetworkSubsystem.stampEphemeralMessage}) or, for an unstamped
+ * message, per copy as it is sent.
+ */
+export type EphemeralStamp = Pick<
+  EphemeralMessage,
+  "senderId" | "sessionId" | "count"
+>
 
 /** Notify the repo that the sync state has changed  */
 export interface SyncStateMessage {

@@ -9,6 +9,7 @@ import {
 import {
   DocumentUnavailableMessage,
   EphemeralMessage,
+  EphemeralStamp,
   MessageContents,
   OpenDocMessage,
   RepoMessage,
@@ -120,10 +121,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #shareConfig: ShareConfig
   #seenEphemeralMessages = new HashRing(1000)
   #networkReady: boolean = false
-  #stampEphemeralMessage?: () => Pick<
-    EphemeralMessage,
-    "senderId" | "sessionId" | "count"
-  >
+  #stampEphemeralMessage?: () => EphemeralStamp
 
   constructor({
     handle,
@@ -143,10 +141,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
      * When absent, the network layer stamps each copy individually as it
      * is sent, which defeats deduplication across network paths.
      */
-    stampEphemeralMessage?: () => Pick<
-      EphemeralMessage,
-      "senderId" | "sessionId" | "count"
-    >
+    stampEphemeralMessage?: () => EphemeralStamp
   }) {
     super()
     this.#handle = handle
@@ -859,17 +854,17 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #sendEphemeralMessage(
     peerId: PeerId,
     data: Uint8Array,
-    stamp?: Pick<EphemeralMessage, "senderId" | "sessionId" | "count">
+    stamp?: EphemeralStamp
   ): void {
     this.#log.debug(`sendEphemeralMessage ->${peerId}`)
-    const message = {
-      type: "ephemeral" as const,
+    const message: MessageContents<EphemeralMessage> = {
+      type: "ephemeral",
       targetId: peerId,
       documentId: this.#handle.documentId,
       data,
       ...stamp,
     }
-    this.emit("message", message as MessageContents<EphemeralMessage>)
+    this.emit("message", message)
   }
 
   #receiveEphemeralMessage(message: EphemeralMessage): void {
