@@ -402,16 +402,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
 
     // Phase 1: Send outbound sync messages to dirty peers.
     for (const [peerId, peer] of this.#peers) {
-      if (peer.sharePolicyState === "loading") continue // share policy pending
-      if (peer.sharePolicyState === "denied") continue // access denied
-      // "share" peers only get messages after they've interacted with the
-      // document (sent a sync/request message, or an ephemeral message)
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceive(peer)) continue // share policy says no (or not yet)
       if (!peer.syncState) continue // sync state still loading
       if (!peer.dirty) continue
 
@@ -672,6 +663,33 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     return false
   }
 
+  /**
+   * Whether to send this peer anything at all for this document.
+   *
+   * This is the single place the share policy is turned into a decision, so
+   * that every send site asks the same question:
+   *
+   * - `loading`: the policy has not resolved yet, so we don't know.
+   * - `denied`: no access, ever.
+   * - `announce`: we proactively share this document with this peer.
+   * - `share`: access without announce. The peer is only a recipient once it
+   *   has engaged with the document itself, by sending a request/sync message
+   *   (`hasRequested`) or by advertising a status. Until then it is merely
+   *   reachable, and sending to it would be an announcement the policy
+   *   declined to make.
+   */
+  #mayReceive(peer: PeerState): boolean {
+    switch (peer.sharePolicyState) {
+      case "loading":
+      case "denied":
+        return false
+      case "announce":
+        return true
+      case "share":
+        return peer.status.type !== "unknown" || peer.hasRequested
+    }
+  }
+
   // SYNC PROTOCOL
 
   #sendSyncMessage(peerId: PeerId, peer: PeerState, doc: A.Doc<unknown>): void {
@@ -814,18 +832,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     // ephemeral messages on that triple across network paths.
     const stamp = this.#stampEphemeralMessage?.()
     for (const [peerId, peer] of this.#peers) {
-      if (
-        peer.sharePolicyState === "denied" ||
-        peer.sharePolicyState === "loading"
-      )
-        continue
-      // "share" peers only get broadcasts after they've interacted
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceive(peer)) continue
       this.#sendEphemeralMessage(peerId, data, stamp)
     }
   }
@@ -887,17 +894,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
 
     for (const [peerId, peer] of this.#peers) {
       if (peerId === senderId) continue
-      if (
-        peer.sharePolicyState === "denied" ||
-        peer.sharePolicyState === "loading"
-      )
-        continue
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceive(peer)) continue
       this.emit("message", { ...message, targetId: peerId })
     }
   }
