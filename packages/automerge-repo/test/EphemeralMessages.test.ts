@@ -2,6 +2,7 @@ import assert from "assert"
 import { describe, it } from "vitest"
 import { Repo } from "../src/Repo.js"
 import { pause } from "../src/helpers/pause.js"
+import { falsePromiseFactory } from "../src/helpers/falsePromiseFactory.js"
 import { PeerId } from "../src/index.js"
 import {
   EphemeralMessage,
@@ -20,7 +21,7 @@ describe("ephemeral messages", () => {
       const alice = new Repo({ peerId: "alice" as PeerId })
       const server = new Repo({
         peerId: "server" as PeerId,
-        sharePolicy: async () => false, // same as examples/sync-server
+        sharePolicy: falsePromiseFactory, // same as examples/sync-server
       })
       const dan = new Repo({ peerId: "dan" as PeerId })
 
