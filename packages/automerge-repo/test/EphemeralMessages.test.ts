@@ -139,6 +139,29 @@ describe("ephemeral messages", () => {
       assert.strictEqual(atBob.seen[0].count, atCharlie.seen[0].count)
     })
 
+    it("keeps counts increasing across documents from one repo", async () => {
+      // The counter is per repo and receivers track the high-water mark per
+      // (senderId, sessionId) across every document, so two broadcasts on
+      // two documents must not filter each other out.
+      const alice = repo({ peerId: "alice" as PeerId })
+      const bob = repo({ peerId: "bob" as PeerId })
+      await connectRepos(alice, bob)
+
+      const first = alice.create<TestDoc>({ foo: "one" })
+      const second = alice.create<TestDoc>({ foo: "two" })
+      const firstAtBob = await bob.find<TestDoc>(first.url)
+      const secondAtBob = await bob.find<TestDoc>(second.url)
+
+      const gotFirst = eventPromise(firstAtBob, "ephemeral-message")
+      const gotSecond = eventPromise(secondAtBob, "ephemeral-message")
+
+      first.broadcast({ doc: "one" })
+      second.broadcast({ doc: "two" })
+
+      assert.deepStrictEqual((await gotFirst).message, { doc: "one" })
+      assert.deepStrictEqual((await gotSecond).message, { doc: "two" })
+    })
+
     it("delivers a broadcast exactly once per peer in a mesh", async () => {
       // Fully-connected triangle: bob receives alice's broadcast directly
       // and again relayed by charlie. Both copies must collapse to a single
