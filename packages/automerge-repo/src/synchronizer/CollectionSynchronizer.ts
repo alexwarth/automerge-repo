@@ -5,7 +5,7 @@ import { DocHandle } from "../DocHandle.js"
 import { parseAutomergeUrl } from "../AutomergeUrl.js"
 import {
   DocMessage,
-  EphemeralMessage,
+  EphemeralStamp,
   MessageContents,
   OpenDocMessage,
 } from "../network/messages.js"
@@ -79,10 +79,7 @@ export interface AutomergeSyncConfig {
    * absent, the network layer stamps each copy individually as it is sent,
    * which defeats deduplication across network paths.
    */
-  stampEphemeralMessage?: () => Pick<
-    EphemeralMessage,
-    "senderId" | "sessionId" | "count"
-  >
+  stampEphemeralMessage?: () => EphemeralStamp
 }
 
 interface CollectionSynchronizerEvents {

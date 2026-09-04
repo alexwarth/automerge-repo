@@ -8,6 +8,7 @@ import type {
 } from "./NetworkAdapterInterface.js"
 import {
   EphemeralMessage,
+  EphemeralStamp,
   MessageContents,
   RepoMessage,
   isEphemeralMessage,
@@ -134,10 +135,7 @@ export class NetworkSubsystem extends EventEmitter<NetworkSubsystemEvents> {
    * different network paths: the app would see duplicates, and a message
    * could be dropped entirely when a copy of a newer one overtakes it.
    */
-  stampEphemeralMessage(): Pick<
-    EphemeralMessage,
-    "senderId" | "sessionId" | "count"
-  > {
+  stampEphemeralMessage(): EphemeralStamp {
     return {
       senderId: this.peerId,
       sessionId: this.#sessionId,

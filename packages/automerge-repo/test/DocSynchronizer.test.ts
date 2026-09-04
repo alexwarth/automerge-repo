@@ -559,4 +559,129 @@ describe("DocSynchronizer", () => {
     assert.ok(unavailableMsg, "should have sent doc-unavailable")
     assert.equal(unavailableMsg!.targetId, bob)
   })
+  describe("a share-policy peer that has only sent ephemeral messages", () => {
+    /** Access without announce: served on request, never pushed to. */
+    const accessOnly: ShareConfig = {
+      announce: async () => false,
+      access: async () => true,
+    }
+
+    /** cbor: { foo: "bar" } */
+    const cborPayload = new Uint8Array([
+      0xa1, 0x63, 0x66, 0x6f, 0x6f, 0x63, 0x62, 0x61, 0x72,
+    ])
+
+    const setupWithBob = async () => {
+      const docId = parseAutomergeUrl(generateAutomergeUrl()).documentId
+      const handle = createTestHandle<TestDoc>(docId)
+      handle.update(() => Automerge.from<TestDoc>({ foo: "" }))
+      const docSync = createDocSynchronizer(
+        handle as DocHandle<unknown>,
+        undefined,
+        accessOnly
+      )
+      docSync.addPeer(bob, Promise.resolve(undefined))
+      await new Promise(setImmediate)
+
+      const messages: MessageContents[] = []
+      docSync.on("message", m => messages.push(m))
+
+      const ephemeralFromBob = {
+        type: "ephemeral" as const,
+        senderId: bob,
+        targetId: alice,
+        documentId: docId,
+        sessionId: "session-1",
+        count: 1,
+        data: cborPayload,
+      }
+
+      return { docId, handle, docSync, messages, ephemeralFromBob }
+    }
+
+    it("receives broadcasts, which it would not before it spoke", async () => {
+      const { handle, docSync, messages, ephemeralFromBob } =
+        await setupWithBob()
+
+      handle.broadcast({ hello: "before" })
+      await new Promise(setImmediate)
+      assert.equal(
+        messages.filter(m => m.type === "ephemeral").length,
+        0,
+        "an access-only peer that has not interacted is not a recipient"
+      )
+
+      docSync.receiveMessage(ephemeralFromBob)
+      await new Promise(setImmediate)
+
+      handle.broadcast({ hello: "after" })
+      await new Promise(setImmediate)
+      assert.equal(
+        messages.filter(m => m.type === "ephemeral" && m.targetId === bob)
+          .length,
+        1
+      )
+    })
+
+    it("is not sent document data", async () => {
+      const { docSync, messages, ephemeralFromBob } = await setupWithBob()
+
+      docSync.receiveMessage(ephemeralFromBob)
+      await new Promise(setImmediate)
+      await new Promise(setImmediate)
+
+      assert.deepStrictEqual(
+        messages.filter(m => m.type === "sync" || m.type === "request"),
+        [],
+        "ephemeral traffic must not unlock document data"
+      )
+    })
+
+    it("still gets an open-doc when it later requests the document", async () => {
+      const { docId, docSync, ephemeralFromBob } = await setupWithBob()
+      const openedFor: PeerId[] = []
+      docSync.on("open-doc", e => openedFor.push(e.peerId))
+
+      docSync.receiveMessage(ephemeralFromBob)
+      await new Promise(setImmediate)
+      assert.deepStrictEqual(
+        openedFor,
+        [],
+        "presence is not a request for the document"
+      )
+
+      const bobHandle = createTestHandle<TestDoc>(docId)
+      const bobSync = createDocSynchronizer(bobHandle as DocHandle<unknown>)
+      const bobP = eventPromise(bobSync, "message")
+      bobSync.addPeer(alice, Promise.resolve(undefined))
+      const request = await bobP
+
+      docSync.receiveMessage({ ...request, senderId: bob } as any)
+      await new Promise(setImmediate)
+
+      assert.deepStrictEqual(openedFor, [bob])
+    })
+  })
+
+  it("leaves a broadcast unstamped when no stamp allocator is configured", async () => {
+    // The network layer then stamps each copy as it is sent. Repo always
+    // supplies an allocator; this is the contract for anything that builds a
+    // DocSynchronizer directly.
+    const docId = parseAutomergeUrl(generateAutomergeUrl()).documentId
+    const handle = createTestHandle<TestDoc>(docId)
+    handle.update(() => Automerge.from<TestDoc>({ foo: "" }))
+    const docSync = createDocSynchronizer(handle as DocHandle<unknown>)
+    docSync.addPeer(bob, Promise.resolve(undefined))
+    await new Promise(setImmediate)
+
+    const p = eventPromise(docSync, "message")
+    handle.broadcast({ hello: "everyone" })
+    const message = await p
+
+    assert.equal(message.type, "ephemeral")
+    assert.ok(
+      !("count" in message),
+      "unstamped broadcast should carry no count"
+    )
+  })
 })

@@ -9,6 +9,7 @@ import {
 import {
   DocumentUnavailableMessage,
   EphemeralMessage,
+  EphemeralStamp,
   MessageContents,
   OpenDocMessage,
   RepoMessage,
@@ -76,6 +77,7 @@ interface PeerState {
   pendingMessages: (SyncMessage | RequestMessage)[] // queued while syncState loads
   dirty: boolean // needs outbound sync message
   hasRequested: boolean // true if peer ever sent request/sync for this doc
+  isPresent: boolean // true if peer ever sent an ephemeral message for this doc
 }
 
 interface DocSynchronizerEvents {
@@ -119,10 +121,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #shareConfig: ShareConfig
   #seenEphemeralMessages = new HashRing(1000)
   #networkReady: boolean = false
-  #stampEphemeralMessage?: () => Pick<
-    EphemeralMessage,
-    "senderId" | "sessionId" | "count"
-  >
+  #stampEphemeralMessage?: () => EphemeralStamp
 
   constructor({
     handle,
@@ -142,10 +141,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
      * When absent, the network layer stamps each copy individually as it
      * is sent, which defeats deduplication across network paths.
      */
-    stampEphemeralMessage?: () => Pick<
-      EphemeralMessage,
-      "senderId" | "sessionId" | "count"
-    >
+    stampEphemeralMessage?: () => EphemeralStamp
   }) {
     super()
     this.#handle = handle
@@ -250,6 +246,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
       pendingMessages: [...messages],
       dirty: true,
       hasRequested: false,
+      isPresent: false,
     }
     // Note that we completely replace any existing state here. This is necessary
     // because once the sync state and share policy are resolved we call
@@ -402,16 +399,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
 
     // Phase 1: Send outbound sync messages to dirty peers.
     for (const [peerId, peer] of this.#peers) {
-      if (peer.sharePolicyState === "loading") continue // share policy pending
-      if (peer.sharePolicyState === "denied") continue // access denied
-      // "share" peers only get messages after they've interacted with the
-      // document (sent a sync/request message, or an ephemeral message)
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceive(peer)) continue // share policy says no (or not yet)
       if (!peer.syncState) continue // sync state still loading
       if (!peer.dirty) continue
 
@@ -672,6 +660,50 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     return false
   }
 
+  /**
+   * Whether to send this peer anything at all for this document.
+   *
+   * This is the single place the share policy is turned into a decision, so
+   * that every send site asks the same question:
+   *
+   * - `loading`: the policy has not resolved yet, so we don't know.
+   * - `denied`: no access, ever.
+   * - `announce`: we proactively share this document with this peer.
+   * - `share`: access without announce. The peer is only a recipient once it
+   *   has engaged with the document itself, by sending a request/sync message
+   *   (`hasRequested`) or by advertising a status. Until then it is merely
+   *   reachable, and sending to it would be an announcement the policy
+   *   declined to make.
+   */
+  #mayReceive(peer: PeerState): boolean {
+    switch (peer.sharePolicyState) {
+      case "loading":
+      case "denied":
+        return false
+      case "announce":
+        return true
+      case "share":
+        return peer.status.type !== "unknown" || peer.hasRequested
+    }
+  }
+
+  /**
+   * Whether to send this peer live ephemeral traffic for this document.
+   *
+   * An ephemeral message is the sending peer's own evidence that it has this
+   * document open, so an "access"-only peer that has only ever sent ephemeral
+   * messages still receives ephemeral traffic back. This is deliberately
+   * weaker than the engagement {@link #mayReceive} requires: `senderId` on an
+   * ephemeral message is not tied to the connection it arrived on (a relayed
+   * message carries its original author's id), so it must not unlock document
+   * data. Relaying presence back to a peer that is already broadcasting it
+   * discloses nothing that peer did not send us.
+   */
+  #mayReceiveEphemeral(peer: PeerState): boolean {
+    if (this.#mayReceive(peer)) return true
+    return peer.sharePolicyState === "share" && peer.isPresent
+  }
+
   // SYNC PROTOCOL
 
   #sendSyncMessage(peerId: PeerId, peer: PeerState, doc: A.Doc<unknown>): void {
@@ -814,18 +846,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     // ephemeral messages on that triple across network paths.
     const stamp = this.#stampEphemeralMessage?.()
     for (const [peerId, peer] of this.#peers) {
-      if (
-        peer.sharePolicyState === "denied" ||
-        peer.sharePolicyState === "loading"
-      )
-        continue
-      // "share" peers only get broadcasts after they've interacted
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceiveEphemeral(peer)) continue
       this.#sendEphemeralMessage(peerId, data, stamp)
     }
   }
@@ -833,17 +854,17 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #sendEphemeralMessage(
     peerId: PeerId,
     data: Uint8Array,
-    stamp?: Pick<EphemeralMessage, "senderId" | "sessionId" | "count">
+    stamp?: EphemeralStamp
   ): void {
     this.#log.debug(`sendEphemeralMessage ->${peerId}`)
-    const message = {
-      type: "ephemeral" as const,
+    const message: MessageContents<EphemeralMessage> = {
+      type: "ephemeral",
       targetId: peerId,
       documentId: this.#handle.documentId,
       data,
       ...stamp,
     }
-    this.emit("message", message as MessageContents<EphemeralMessage>)
+    this.emit("message", message)
   }
 
   #receiveEphemeralMessage(message: EphemeralMessage): void {
@@ -858,27 +879,17 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     // Only emit and forward it once per unique sender/session/count.
     if (!isNewMessage) return
 
-    // An ephemeral message from a directly-connected peer is interaction
-    // with this document, just like a sync/request message: it proves the
-    // peer has the document open. Without this, a "share"-policy peer whose
-    // traffic is ephemeral-only (e.g. presence or cursor updates) never
-    // leaves the "unknown" state and is never relayed to — and if we lose
-    // our peer state for them (reconnect, document eviction) their
-    // ephemeral traffic alone could never restore delivery to them.
-    // (For relayed messages the original author is not one of our peers and
-    // this is a no-op; their standing is tracked by the repo they connect
-    // to directly.)
+    // Record that this peer has the document open, so we relay ephemeral
+    // traffic back to it. Without this, a "share"-policy peer whose traffic
+    // is ephemeral-only (e.g. presence or cursor updates) never leaves the
+    // "unknown" state and is never relayed to, so its own messages reach
+    // everyone while nothing ever reaches it.
+    //
+    // This deliberately does not set `hasRequested`: see
+    // {@link #mayReceiveEphemeral}. A peer that wants document data has to
+    // ask for it over a channel whose sender we can attribute.
     const senderPeer = this.#peers.get(senderId)
-    if (senderPeer && !senderPeer.hasRequested) {
-      if (senderPeer.sharePolicyState === "share") {
-        this.emit("open-doc", { documentId: this.documentId, peerId: senderId })
-      }
-      senderPeer.hasRequested = true
-      // Let #evaluate (re)initiate sync with them: after losing our peer
-      // state we may believe they're a stranger to this doc when they are
-      // in fact a fully synced collaborator.
-      senderPeer.dirty = true
-    }
+    if (senderPeer) senderPeer.isPresent = true
 
     const contents = decode(new Uint8Array(data))
     // Inject the inbound message at the document level; the registry
@@ -887,17 +898,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
 
     for (const [peerId, peer] of this.#peers) {
       if (peerId === senderId) continue
-      if (
-        peer.sharePolicyState === "denied" ||
-        peer.sharePolicyState === "loading"
-      )
-        continue
-      if (
-        peer.sharePolicyState === "share" &&
-        peer.status.type === "unknown" &&
-        !peer.hasRequested
-      )
-        continue
+      if (!this.#mayReceiveEphemeral(peer)) continue
       this.emit("message", { ...message, targetId: peerId })
     }
   }
