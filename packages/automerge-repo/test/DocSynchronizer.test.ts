@@ -629,6 +629,32 @@ describe("DocSynchronizer", () => {
       )
     })
 
+    it("is sent document data once it asks, even with a heads-empty sync", async () => {
+      // A sync message (not a request) carrying no heads leaves the peer's
+      // status "unknown", so only hasRequested distinguishes it from a peer
+      // that has never spoken. It has asked, so it gets an answer.
+      const { docSync, messages } = await setupWithBob()
+
+      const [, emptySync] = Automerge.generateSyncMessage(
+        Automerge.init(),
+        Automerge.initSyncState()
+      )
+      docSync.receiveMessage({
+        type: "sync",
+        senderId: bob,
+        targetId: alice,
+        documentId: docSync.documentId,
+        data: emptySync!,
+      })
+      await new Promise(setImmediate)
+      await new Promise(setImmediate)
+
+      assert.ok(
+        messages.some(m => m.type === "sync" && m.targetId === bob),
+        "a peer that sent a heads-empty sync should still get a response"
+      )
+    })
+
     it("is not sent document data", async () => {
       const { docSync, messages, ephemeralFromBob } = await setupWithBob()
 
