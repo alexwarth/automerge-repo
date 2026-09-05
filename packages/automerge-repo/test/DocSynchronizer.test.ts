@@ -12,7 +12,7 @@ import { eventPromise } from "../src/helpers/eventPromise.js"
 import { MessageContents } from "../src/network/messages.js"
 import { DocSynchronizer } from "../src/synchronizer/DocSynchronizer.js"
 import type { ShareConfig } from "../src/synchronizer/DocSynchronizer.js"
-import { PeerId } from "../src/types.js"
+import { PeerId, SessionId } from "../src/types.js"
 import { TestDoc } from "./types.js"
 import { createTestHandle, createTestQuery } from "./helpers/testHandle.js"
 
@@ -38,11 +38,17 @@ function createDocSynchronizer(
   if (!query) {
     query = new DocumentQuery(handle)
   }
+  let count = 0
   return new DocSynchronizer({
     handle,
     query,
     networkReady,
     shareConfig: shareConfig ?? defaultShareConfig,
+    stampEphemeralMessage: () => ({
+      senderId: alice,
+      sessionId: "test-session" as SessionId,
+      count: ++count,
+    }),
   })
 }
 
@@ -661,27 +667,5 @@ describe("DocSynchronizer", () => {
 
       assert.deepStrictEqual(openedFor, [bob])
     })
-  })
-
-  it("leaves a broadcast unstamped when no stamp allocator is configured", async () => {
-    // The network layer then stamps each copy as it is sent. Repo always
-    // supplies an allocator; this is the contract for anything that builds a
-    // DocSynchronizer directly.
-    const docId = parseAutomergeUrl(generateAutomergeUrl()).documentId
-    const handle = createTestHandle<TestDoc>(docId)
-    handle.update(() => Automerge.from<TestDoc>({ foo: "" }))
-    const docSync = createDocSynchronizer(handle as DocHandle<unknown>)
-    docSync.addPeer(bob, Promise.resolve(undefined))
-    await new Promise(setImmediate)
-
-    const p = eventPromise(docSync, "message")
-    handle.broadcast({ hello: "everyone" })
-    const message = await p
-
-    assert.equal(message.type, "ephemeral")
-    assert.ok(
-      !("count" in message),
-      "unstamped broadcast should carry no count"
-    )
   })
 })

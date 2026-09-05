@@ -121,7 +121,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #shareConfig: ShareConfig
   #seenEphemeralMessages = new HashRing(1000)
   #networkReady: boolean = false
-  #stampEphemeralMessage?: () => EphemeralStamp
+  #stampEphemeralMessage: () => EphemeralStamp
 
   constructor({
     handle,
@@ -141,7 +141,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
      * When absent, the network layer stamps each copy individually as it
      * is sent, which defeats deduplication across network paths.
      */
-    stampEphemeralMessage?: () => EphemeralStamp
+    stampEphemeralMessage: () => EphemeralStamp
   }) {
     super()
     this.#handle = handle
@@ -840,7 +840,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     // Stamp the broadcast once so every per-peer copy shares one
     // (senderId, sessionId, count) identity — receivers deduplicate
     // ephemeral messages on that triple across network paths.
-    const stamp = this.#stampEphemeralMessage?.()
+    const stamp = this.#stampEphemeralMessage()
     for (const [peerId, peer] of this.#peers) {
       if (!this.#mayReceiveEphemeral(peer)) continue
       this.#sendEphemeralMessage(peerId, data, stamp)
@@ -850,7 +850,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
   #sendEphemeralMessage(
     peerId: PeerId,
     data: Uint8Array,
-    stamp?: EphemeralStamp
+    stamp: EphemeralStamp
   ): void {
     this.#log.debug(`sendEphemeralMessage ->${peerId}`)
     const message: MessageContents<EphemeralMessage> = {

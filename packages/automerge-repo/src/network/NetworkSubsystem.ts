@@ -157,19 +157,9 @@ export class NetworkSubsystem extends EventEmitter<NetworkSubsystemEvents> {
      */
     const prepareMessage = (message: MessageContents): RepoMessage => {
       if (message.type === "ephemeral") {
-        if ("count" in message) {
-          // stamped ephemeral message (our own broadcast, or another peer's
-          // message being relayed); pass on without changes
-          return message as EphemeralMessage
-        } else {
-          // unstamped ephemeral message; stamp this copy. (The synchronizer
-          // stamps broadcasts itself via stampEphemeralMessage so all copies
-          // share one stamp; this fallback covers direct senders.)
-          return {
-            ...message,
-            ...this.stampEphemeralMessage(),
-          } as EphemeralMessage
-        }
+        // Already stamped, whether it is our own broadcast or another peer's
+        // message being relayed; pass it on unchanged.
+        return message
       } else {
         // other message type; just add our senderId
         return {

@@ -79,7 +79,7 @@ export interface AutomergeSyncConfig {
    * absent, the network layer stamps each copy individually as it is sent,
    * which defeats deduplication across network paths.
    */
-  stampEphemeralMessage?: () => EphemeralStamp
+  stampEphemeralMessage: () => EphemeralStamp
 }
 
 interface CollectionSynchronizerEvents {

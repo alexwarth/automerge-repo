@@ -139,12 +139,13 @@ export type DocMessage =
   | DocumentUnavailableMessage
 
 /**
- * The contents of a message, without the sender ID or other properties added by the {@link NetworkSubsystem})
+ * The contents of a message, without the sender ID or other properties added
+ * by the {@link NetworkSubsystem}. Ephemeral messages are the exception: their
+ * {@link EphemeralStamp} is allocated once per broadcast by the sender, so it
+ * is already present by the time the message reaches the network layer.
  */
 export type MessageContents<T extends Message = RepoMessage> =
-  T extends EphemeralMessage
-    ? Omit<T, "senderId" | "count" | "sessionId"> & Partial<EphemeralStamp>
-    : Omit<T, "senderId">
+  T extends EphemeralMessage ? T : Omit<T, "senderId">
 
 /**
  * The fields that identify one ephemeral broadcast.
@@ -152,8 +153,7 @@ export type MessageContents<T extends Message = RepoMessage> =
  * Receivers deduplicate ephemeral messages on this triple, so every per-peer
  * copy of a single logical broadcast must carry the same one. It is allocated
  * either by the sender of the broadcast (see
- * {@link NetworkSubsystem.stampEphemeralMessage}) or, for an unstamped
- * message, per copy as it is sent.
+ * {@link NetworkSubsystem.stampEphemeralMessage}).
  */
 export type EphemeralStamp = Pick<
   EphemeralMessage,
