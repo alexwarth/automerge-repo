@@ -602,15 +602,11 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
 
     // Only emit "open-doc" when the peer has actually interacted with
     // this document. "announce" peers are proactively shared with, and
-    // peers with pending messages (or that sent an ephemeral message while
-    // we were loading, marked via hasRequested) have explicitly engaged
-    // with the doc. "share" peers without any interaction are just
-    // passively available.
+    // peers with pending messages have explicitly requested the doc.
+    // "share" peers without pending messages are just passively available.
     if (
       isNewPeer &&
-      (sharePolicyState === "announce" ||
-        peer.pendingMessages.length > 0 ||
-        peer.hasRequested)
+      (sharePolicyState === "announce" || peer.pendingMessages.length > 0)
     ) {
       this.emit("open-doc", { documentId: this.documentId, peerId })
     }
