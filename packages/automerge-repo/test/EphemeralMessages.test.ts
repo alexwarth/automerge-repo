@@ -91,8 +91,9 @@ describe("ephemeral messages", () => {
   })
 
   describe("broadcast stamping", () => {
-    // Receivers deduplicate ephemeral messages on (senderId, sessionId,
-    // count), so all per-peer copies of one broadcast carry one stamp.
+    // A receiver ignores any count not strictly greater than the highest it
+    // has seen for that (senderId, sessionId), so all per-peer copies of one
+    // broadcast carry one stamp.
     const meshSetup = async ({ bobToCharlie }: { bobToCharlie: boolean }) => {
       const alice = repo({ peerId: "alice" as PeerId })
       const bob = repo({ peerId: "bob" as PeerId })

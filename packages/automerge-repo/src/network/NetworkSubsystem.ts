@@ -127,13 +127,7 @@ export class NetworkSubsystem extends EventEmitter<NetworkSubsystemEvents> {
   }
 
   /**
-   * Allocates the identifying envelope (senderId, sessionId, count) for one
-   * outbound ephemeral broadcast. Receivers deduplicate ephemeral messages by
-   * this triple, so every copy of a single logical broadcast (one copy per
-   * peer) must carry the same stamp. If each copy were stamped individually
-   * on send, the same broadcast would arrive with different counts over
-   * different network paths: the app would see duplicates, and a message
-   * could be dropped entirely when a copy of a newer one overtakes it.
+   * Allocates the {@link EphemeralStamp} for one outbound broadcast.
    */
   stampEphemeralMessage(): EphemeralStamp {
     return {
@@ -157,19 +151,8 @@ export class NetworkSubsystem extends EventEmitter<NetworkSubsystemEvents> {
      */
     const prepareMessage = (message: MessageContents): RepoMessage => {
       if (message.type === "ephemeral") {
-        if ("count" in message) {
-          // stamped ephemeral message (our own broadcast, or another peer's
-          // message being relayed); pass on without changes
-          return message as EphemeralMessage
-        } else {
-          // unstamped ephemeral message; stamp this copy. (The synchronizer
-          // stamps broadcasts itself via stampEphemeralMessage so all copies
-          // share one stamp; this fallback covers direct senders.)
-          return {
-            ...message,
-            ...this.stampEphemeralMessage(),
-          } as EphemeralMessage
-        }
+        // Already stamped, by us or by whoever we are relaying for.
+        return message
       } else {
         // other message type; just add our senderId
         return {
