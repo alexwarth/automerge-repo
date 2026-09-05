@@ -692,8 +692,8 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
    * weaker than the engagement {@link #mayReceive} requires: `senderId` on an
    * ephemeral message is not tied to the connection it arrived on (a relayed
    * message carries its original author's id), so it must not unlock document
-   * data. Relaying presence back to a peer that is already broadcasting it
-   * discloses nothing that peer did not send us.
+   * data. Note that another peer can set `isPresent` on this one's behalf;
+   * that is bounded rather than closed, since the peer already holds `access`.
    */
   #mayReceiveEphemeral(peer: PeerState): boolean {
     if (this.#mayReceive(peer)) return true
@@ -876,16 +876,12 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     if (!isNewMessage) return
 
     // Record that this peer has the document open, so we relay ephemeral
-    // traffic back to it. Without this, a "share"-policy peer whose traffic
-    // is ephemeral-only (e.g. presence or cursor updates) never leaves the
-    // "unknown" state and is never relayed to, so its own messages reach
-    // everyone while nothing ever reaches it.
-    //
-    // This deliberately does not set `hasRequested`: see
-    // {@link #mayReceiveEphemeral}. A peer that wants document data has to
-    // ask for it over a channel whose sender we can attribute.
+    // traffic back to it. Deliberately not `hasRequested`, which unlocks
+    // document data; see {@link #mayReceiveEphemeral}.
     const senderPeer = this.#peers.get(senderId)
-    if (senderPeer) senderPeer.isPresent = true
+    if (senderPeer && senderPeer.sharePolicyState !== "denied") {
+      senderPeer.isPresent = true
+    }
 
     const contents = decode(new Uint8Array(data))
     // Inject the inbound message at the document level; the registry
