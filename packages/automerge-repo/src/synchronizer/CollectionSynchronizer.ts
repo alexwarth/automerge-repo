@@ -73,11 +73,7 @@ export interface AutomergeSyncConfig {
   sharePolicyConcurrency?: number
 
   /**
-   * Allocates the (senderId, sessionId, count) envelope for one outbound
-   * ephemeral broadcast, so that every per-peer copy of the broadcast
-   * shares a single identity (receivers deduplicate on that triple). When
-   * absent, the network layer stamps each copy individually as it is sent,
-   * which defeats deduplication across network paths.
+   * Allocates one {@link EphemeralStamp} per outbound broadcast.
    */
   stampEphemeralMessage: () => EphemeralStamp
 }

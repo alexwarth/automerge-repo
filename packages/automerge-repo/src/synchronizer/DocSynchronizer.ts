@@ -135,11 +135,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     networkReady: Promise<void>
     shareConfig: ShareConfig
     /**
-     * Allocates the (senderId, sessionId, count) envelope for one outbound
-     * ephemeral broadcast, so that every per-peer copy of the broadcast
-     * shares a single identity (receivers deduplicate on that triple).
-     * When absent, the network layer stamps each copy individually as it
-     * is sent, which defeats deduplication across network paths.
+     * Allocates one {@link EphemeralStamp} per outbound broadcast.
      */
     stampEphemeralMessage: () => EphemeralStamp
   }) {
@@ -837,9 +833,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
     data,
   }: DocHandleOutboundEphemeralMessagePayload<unknown>): void {
     this.#log.debug(`broadcastToPeers`, Array.from(this.#peers.keys()))
-    // Stamp the broadcast once so every per-peer copy shares one
-    // (senderId, sessionId, count) identity — receivers deduplicate
-    // ephemeral messages on that triple across network paths.
+    // Stamp the broadcast once so every per-peer copy shares one identity.
     const stamp = this.#stampEphemeralMessage()
     for (const [peerId, peer] of this.#peers) {
       if (!this.#mayReceiveEphemeral(peer)) continue
