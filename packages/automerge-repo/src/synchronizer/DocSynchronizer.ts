@@ -663,9 +663,7 @@ export class DocSynchronizer extends EventEmitter<DocSynchronizerEvents> {
    * - `announce`: we proactively share this document with this peer.
    * - `share`: access without announce. The peer is only a recipient once it
    *   has engaged with the document itself, by sending a request/sync message
-   *   (`hasRequested`) or by advertising a status. Until then it is merely
-   *   reachable, and sending to it would be an announcement the policy
-   *   declined to make.
+   *   (`hasRequested`) or by advertising a status.
    */
   #mayReceive(peer: PeerState): boolean {
     switch (peer.sharePolicyState) {
